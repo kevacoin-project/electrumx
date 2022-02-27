@@ -29,10 +29,9 @@
 Anything coin-specific should go in this file and be subclassed where
 necessary for appropriate handling.
 '''
-
-from collections import namedtuple
 import re
 import struct
+from dataclasses import dataclass
 from decimal import Decimal
 from hashlib import sha256
 
@@ -46,14 +45,19 @@ import electrumx.server.block_processor as block_proc
 import electrumx.server.daemon as daemon
 from electrumx.server.session import (ElectrumX, AuxPoWElectrumX)
 
-Block = namedtuple("Block", "raw header transactions")
+@dataclass
+class Block:
+    __slots__ = "raw", "header", "transactions"
+    raw: bytes
+    header: bytes
+    transactions: Sequence[Tuple[Tx, bytes]]
 
 
 class CoinError(Exception):
     '''Exception raised for coin-related errors.'''
 
 
-class Coin(object):
+class Coin:
     '''Base class of coin hierarchy.'''
 
     REORG_LIMIT = 200
@@ -73,7 +77,7 @@ class Coin(object):
     HEADER_UNPACK = struct.Struct('< I 32s 32s I I I').unpack_from
     MEMPOOL_HISTOGRAM_REFRESH_SECS = 500
     P2PKH_VERBYTE = bytes.fromhex("00")
-    P2SH_VERBYTES = [bytes.fromhex("05")]
+    P2SH_VERBYTES = (bytes.fromhex("05"),)
     XPUB_VERBYTES = bytes('????', 'utf-8')
     XPRV_VERBYTES = bytes('????', 'utf-8')
     WIF_BYTE = bytes.fromhex("80")
@@ -87,26 +91,38 @@ class Coin(object):
     PEERS = []
     CRASH_CLIENT_VER = None
     BLACKLIST_URL = None
+    ESTIMATEFEE_MODES = (None, 'CONSERVATIVE', 'ECONOMICAL')
+
+    RPC_PORT: int
+    NAME: str
+    NET: str
+
+    # only used for initial db sync ETAs:
+    TX_COUNT_HEIGHT: int  # at a given snapshot of the chain,
+    TX_COUNT: int         # there have been this many txs so far,
+    TX_PER_BLOCK: int     # and from that height onwards, we guess this many txs per block
 
     @classmethod
     def lookup_coin_class(cls, name, net):
         '''Return a coin class given name and network.
 
         Raise an exception if unrecognised.'''
-        req_attrs = ['TX_COUNT', 'TX_COUNT_HEIGHT', 'TX_PER_BLOCK']
+        req_attrs = ('TX_COUNT', 'TX_COUNT_HEIGHT', 'TX_PER_BLOCK')
         for coin in util.subclasses(Coin):
             print(coin)
             if (coin.NAME.lower() == name.lower() and
                     coin.NET.lower() == net.lower()):
-                coin_req_attrs = req_attrs.copy()
-                missing = [attr for attr in coin_req_attrs
-                           if not hasattr(coin, attr)]
+                missing = [
+                    attr
+                    for attr in req_attrs
+                    if not hasattr(coin, attr)
+                ]
                 if missing:
-                    raise CoinError('coin {} missing {} attributes'
-                                    .format(name, missing))
+                    raise CoinError(
+                        f'coin {name} missing {missing} attributes'
+                    )
                 return coin
-        raise CoinError('unknown coin {} and network {} combination'
-                        .format(name, net))
+        raise CoinError(f'unknown coin {name} and network {net} combination')
 
     @classmethod
     def sanitize_url(cls, url):
@@ -114,11 +130,11 @@ class Coin(object):
         url = url.strip().rstrip('/')
         match = cls.RPC_URL_REGEX.match(url)
         if not match:
-            raise CoinError('invalid daemon URL: "{}"'.format(url))
+            raise CoinError(f'invalid daemon URL: "{url}"')
         if match.groups()[1] is None:
-            url += ':{:d}'.format(cls.RPC_PORT)
-        if not url.startswith('http://') and not url.startswith('https://'):
-            url = 'http://' + url
+            url = f'{url}:{cls.RPC_PORT:d}'
+        if not url.startswith(('http://', 'https://')):
+            url = f'http://{url}'
         return url + '/'
 
     @classmethod
@@ -136,10 +152,10 @@ class Coin(object):
         header = cls.block_header(block, 0)
         header_hex_hash = hash_to_hex_str(cls.header_hash(header))
         if header_hex_hash != cls.GENESIS_HASH:
-            raise CoinError('genesis block has hash {} expected {}'
-                            .format(header_hex_hash, cls.GENESIS_HASH))
+            raise CoinError(f'genesis block has hash {header_hex_hash} '
+                            f'expected {cls.GENESIS_HASH}')
 
-        return header + bytes(1)
+        return header + b'\0'
 
     @classmethod
     def hashX_from_script(cls, script):
@@ -161,23 +177,6 @@ class Coin(object):
     def address_to_hashX(cls, address):
         '''Return a hashX given a coin address.'''
         return cls.hashX_from_script(cls.pay_to_address_script(address))
-
-    @classmethod
-    def P2PKH_address_from_hash160(cls, hash160):
-        '''Return a P2PKH address given a public key.'''
-        assert len(hash160) == 20
-        return cls.ENCODE_CHECK(cls.P2PKH_VERBYTE + hash160)
-
-    @classmethod
-    def P2PKH_address_from_pubkey(cls, pubkey):
-        '''Return a coin address given a public key.'''
-        return cls.P2PKH_address_from_hash160(hash160(pubkey))
-
-    @classmethod
-    def P2SH_address_from_hash160(cls, hash160):
-        '''Return a coin address given a hash160.'''
-        assert len(hash160) == 20
-        return cls.ENCODE_CHECK(cls.P2SH_VERBYTES[0] + hash160)
 
     @classmethod
     def hash160_to_P2PKH_script(cls, hash160):
@@ -206,12 +205,12 @@ class Coin(object):
         if verbyte in cls.P2SH_VERBYTES:
             return ScriptPubKey.P2SH_script(hash160)
 
-        raise CoinError('invalid address: {}'.format(address))
+        raise CoinError(f'invalid address: {address}')
 
     @classmethod
     def privkey_WIF(cls, privkey_bytes, compressed):
         '''Return the private key encoded in Wallet Import Format.'''
-        payload = bytearray(cls.WIF_BYTE) + privkey_bytes
+        payload = bytearray(cls.WIF_BYTE + privkey_bytes)
         if compressed:
             payload.append(0x01)
         return cls.ENCODE_CHECK(payload)
@@ -266,8 +265,15 @@ class Coin(object):
     def warn_old_client_on_tx_broadcast(cls, _client_ver):
         return False
 
+    @classmethod
+    def bucket_estimatefee_block_target(cls, n: int) -> int:
+        '''For caching purposes, it might be desirable to restrict the
+        set of values that can be queried as an estimatefee block target.
+        '''
+        return n
 
-class AuxPowMixin(object):
+
+class AuxPowMixin:
     STATIC_BLOCK_HEADERS = False
     DESERIALIZER = lib_tx.DeserializerAuxPow
     SESSIONCLS = AuxPoWElectrumX
@@ -362,11 +368,11 @@ class NameMixin(object):
         num_2drop = num_dp // 2
         num_drop = num_dp % 2
 
-        two_drops = [OpCodes.OP_2DROP for _ in range(num_2drop)]
-        one_drops = [OpCodes.OP_DROP for _ in range(num_drop)]
+        two_drops = [OpCodes.OP_2DROP] * num_2drop
+        one_drops = [OpCodes.OP_DROP] * num_drop
 
         elements_added = num_dp + num_2drop + num_drop
-        placeholders = [-1 for _ in range(num_dp)]
+        placeholders = [-1] * num_dp
         drops = two_drops + one_drops
 
         return elements_added, template + placeholders + drops
@@ -431,8 +437,8 @@ class NameIndexMixin(NameMixin):
 
         res = bytearray()
         res.append(cls.OP_NAME_UPDATE)
-        res.extend(Script.push_data(name))
-        res.extend(Script.push_data(bytes([])))
+        res += Script.push_data(name)
+        res += Script.push_data(b'')
         res.append(OpCodes.OP_2DROP)
         res.append(OpCodes.OP_DROP)
         res.append(OpCodes.OP_RETURN)
@@ -485,13 +491,12 @@ class BitcoinSegwit(BitcoinMixin, Coin):
     NAME = "BitcoinSegwit"
     DESERIALIZER = lib_tx.DeserializerSegWit
     MEMPOOL_HISTOGRAM_REFRESH_SECS = 120
-    TX_COUNT = 318337769
-    TX_COUNT_HEIGHT = 524213
-    TX_PER_BLOCK = 1400
+    TX_COUNT = 565436782
+    TX_COUNT_HEIGHT = 646855
+    TX_PER_BLOCK = 2200
     CRASH_CLIENT_VER = (3, 2, 3)
     BLACKLIST_URL = 'https://electrum.org/blacklist.json'
     PEERS = [
-        'E-X.not.fyi s t',
         'electrum.vom-stausee.de s t',
         'electrum.hsmiths.com s t',
         'helicarrier.bauerj.eu s t',
@@ -506,6 +511,7 @@ class BitcoinSegwit(BitcoinMixin, Coin):
         'currentlane.lovebitco.in s t',
         'electrum.jochen-hoenicke.de s50005 t50003',
         'vps5.hsmiths.com s',
+        'electrum.emzy.de s',
     ]
 
     @classmethod
@@ -519,6 +525,25 @@ class BitcoinSegwit(BitcoinMixin, Coin):
                     '<br/><br/>')
         return False
 
+    @classmethod
+    def bucket_estimatefee_block_target(cls, n: int) -> int:
+        # values based on https://github.com/bitcoin/bitcoin/blob/af05bd9e1e362c3148e3b434b7fac96a9a5155a1/src/policy/fees.h#L131  # noqa
+        if n <= 1:
+            return 1
+        if n <= 12:
+            return n
+        if n == 25:  # so common that we make an exception for it
+            return n
+        if n <= 48:
+            return n // 2 * 2
+        if n <= 1008:
+            return n // 24 * 24
+        return 1008
+
+
+class BitcoinSegwit(Bitcoin):
+    NAME = "BitcoinSegwit"  # support legacy name
+
 
 class BitcoinTestnetMixin(object):
     SHORTNAME = "XTN"
@@ -526,7 +551,7 @@ class BitcoinTestnetMixin(object):
     XPUB_VERBYTES = bytes.fromhex("043587cf")
     XPRV_VERBYTES = bytes.fromhex("04358394")
     P2PKH_VERBYTE = bytes.fromhex("6f")
-    P2SH_VERBYTES = [bytes.fromhex("c4")]
+    P2SH_VERBYTES = (bytes.fromhex("c4"),)
     WIF_BYTE = bytes.fromhex("ef")
     GENESIS_HASH = ('000000000933ea01ad0ee984209779ba'
                     'aec3ced90fa3f408719526f8d77f4943')
@@ -573,9 +598,9 @@ class BitcoinSVRegtest(BitcoinSVTestnet):
     GENESIS_ACTIVATION = 10_000
 
 
-class BitcoinSegwitTestnet(BitcoinTestnetMixin, Coin):
+class BitcoinTestnet(BitcoinTestnetMixin, Coin):
     '''Bitcoin Testnet for Core bitcoind >= 0.13.1.'''
-    NAME = "BitcoinSegwit"
+    NAME = "Bitcoin"
     DESERIALIZER = lib_tx.DeserializerSegWit
     CRASH_CLIENT_VER = (3, 2, 3)
     PEERS = [
@@ -599,8 +624,12 @@ class BitcoinSegwitTestnet(BitcoinTestnetMixin, Coin):
         return False
 
 
-class BitcoinSegwitRegtest(BitcoinSegwitTestnet):
-    NAME = "BitcoinSegwit"
+class BitcoinSegwitTestnet(BitcoinTestnet):
+    NAME = "BitcoinSegwit"  # support legacy name
+
+
+class BitcoinRegtest(BitcoinTestnet):
+    NAME = "Bitcoin"
     NET = "regtest"
     GENESIS_HASH = ('0f9188f13cb7b2c71f2a335e3a4fc328'
                     'bf5beb436012afca590b1a11466e2206')
@@ -615,7 +644,7 @@ class Litecoin(Coin):
     XPUB_VERBYTES = bytes.fromhex("0488b21e")
     XPRV_VERBYTES = bytes.fromhex("0488ade4")
     P2PKH_VERBYTE = bytes.fromhex("30")
-    P2SH_VERBYTES = [bytes.fromhex("32"), bytes.fromhex("05")]
+    P2SH_VERBYTES = (bytes.fromhex("32"), bytes.fromhex("05"))
     WIF_BYTE = bytes.fromhex("b0")
     GENESIS_HASH = ('12a765e31ffd4059bada1e25190f6e98'
                     'c99d9714d334efa41a195a7e7e04bfe2')
@@ -642,7 +671,7 @@ class LitecoinTestnet(Litecoin):
     XPUB_VERBYTES = bytes.fromhex("043587cf")
     XPRV_VERBYTES = bytes.fromhex("04358394")
     P2PKH_VERBYTE = bytes.fromhex("6f")
-    P2SH_VERBYTES = [bytes.fromhex("3a"), bytes.fromhex("c4")]
+    P2SH_VERBYTES = (bytes.fromhex("3a"), bytes.fromhex("c4"))
     WIF_BYTE = bytes.fromhex("ef")
     GENESIS_HASH = ('4966625a4b2851d9fdee139e56211a0d'
                     '88575f59ed816ff5e6a63deb4e3e29a0')
@@ -655,6 +684,7 @@ class LitecoinTestnet(Litecoin):
     PEERS = [
         'electrum-ltc.bysh.me s t',
         'electrum.ltc.xurious.com s t',
+        'ipv6-only.electrum.random.re s t',
     ]
 
 
@@ -674,7 +704,7 @@ class Namecoin(NameIndexMixin, AuxPowMixin, Coin):
     XPUB_VERBYTES = bytes.fromhex("d7dd6370")
     XPRV_VERBYTES = bytes.fromhex("d7dc6e31")
     P2PKH_VERBYTE = bytes.fromhex("34")
-    P2SH_VERBYTES = [bytes.fromhex("0d")]
+    P2SH_VERBYTES = (bytes.fromhex("0d"),)
     WIF_BYTE = bytes.fromhex("e4")
     GENESIS_HASH = ('000000000062b72c5e2ceb45fbc8587e'
                     '807c155b0da735e6483dfba2f0a9c770')
@@ -684,10 +714,14 @@ class Namecoin(NameIndexMixin, AuxPowMixin, Coin):
     TX_PER_BLOCK = 10
     RPC_PORT = 8336
     PEERS = [
+        '188.167.144.126 s50002',
+        '46.229.238.187 s57002',
+        '82.119.233.36 s50002',
         'electrum-nmc.le-space.de s50002',
         'ex.lug.gs s446',
         'luggscoqbymhvnkp.onion t82',
         'nmc.bitcoins.sk s50002',
+        'nmc2.bitcoins.sk s57002',
         'ulrichard.ch s50006 t50005',
     ]
     BLOCK_PROCESSOR = block_proc.NameIndexBlockProcessor
@@ -703,11 +737,11 @@ class Namecoin(NameIndexMixin, AuxPowMixin, Coin):
                             OpCodes.OP_2DROP, OpCodes.OP_2DROP]
     NAME_UPDATE_OPS = [OP_NAME_UPDATE, "name", -1, OpCodes.OP_2DROP,
                        OpCodes.OP_DROP]
-    NAME_OPERATIONS = [
+    NAME_OPERATIONS = (
         NAME_NEW_OPS,
         NAME_FIRSTUPDATE_OPS,
         NAME_UPDATE_OPS,
-    ]
+    )
 
 
 class NamecoinTestnet(Namecoin):
@@ -715,7 +749,7 @@ class NamecoinTestnet(Namecoin):
     SHORTNAME = "XNM"
     NET = "testnet"
     P2PKH_VERBYTE = bytes.fromhex("6f")
-    P2SH_VERBYTES = [bytes.fromhex("c4")]
+    P2SH_VERBYTES = (bytes.fromhex("c4"),)
     WIF_BYTE = bytes.fromhex("ef")
     GENESIS_HASH = ('00000007199508e34a9ff81e6ec0c477'
                     'a4cccff2a4767a8eee39c11db367b008')

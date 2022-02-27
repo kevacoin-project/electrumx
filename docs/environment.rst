@@ -22,7 +22,7 @@ These environment variables are always required:
 .. envvar:: COIN
 
   Must be a :attr:`NAME` from one of the :class:`Coin` classes in
-  `lib/coins.py`_.
+  `lib/coins.py`_. For example, ``Bitcoin``.
 
 .. envvar:: DB_DIRECTORY
 
@@ -281,6 +281,14 @@ These environment variables are optional:
   version string. For example to drop versions from 1.0 to 1.2 use
   the regex ``1\.[0-2]\.\d+``.
 
+.. envvar:: DROP_CLIENT_UNKNOWN
+
+  Set to anything non-empty to deny serving clients which do not
+  identify themselves first by issuing the server.version method
+  call with a non-empty client identifier. The connection is dropped 
+  on first actual method call. This might help to filter out simple 
+  robots. This behavior is off by default.
+
 
 Resource Usage Limits
 =====================
@@ -299,6 +307,14 @@ raise them.
   SSL listening sockets are closed until the session count drops
   naturally to 95% of the limit.  Defaults to 1,000.
 
+.. envvar:: MAX_RECV
+
+  The maximum size of an incoming message in bytes, the default is 1,000,000 bytes.
+  Note that the smallest sane/safe value for Bitcoin is ~800,100 bytes,
+  as the largest standard tx can have a weight of 400K but the protocol hex-encodes that,
+  plus there is a few bytes of protocol overhead. Setting this to lower than that
+  would preclude clients from broadcasting txs that could propagate over the network.
+
 .. envvar:: MAX_SEND
 
   The maximum size of a response message to send over the wire, in
@@ -311,9 +327,9 @@ raise them.
   served all at once or not at all, an obvious avenue for abuse.
   :envvar:`MAX_SEND` is a stop-gap until the protocol is improved to
   admit incremental history requests.  Each history entry is
-  approximately 100 bytes so the default is equivalent to a history
+  approximately 100 bytes, so the default is equivalent to a history
   limit of around 10,000 entries, which should be ample for most
-  legitimate users.  If you use a higher default bear in mind one
+  legitimate users.  If you use a higher default, bear in mind one
   client can request history for multiple addresses.  Also note that
   the largest raw transaction you will be able to serve to a client is
   just under half of :envvar:`MAX_SEND`, as each raw byte becomes 2
@@ -324,6 +340,8 @@ raise them.
 .. envvar:: COST_HARD_LIMIT
 .. envvar:: REQUEST_SLEEP
 .. envvar:: INITIAL_CONCURRENT
+.. envvar:: SESSION_GROUP_BY_SUBNET_IPV4
+.. envvar:: SESSION_GROUP_BY_SUBNET_IPV6
 
   All values are integers. :envvar:`COST_SOFT_LIMIT` defaults to :const:`1,000`,
   :envvar:`COST_HARD_LIMIT` to :const:`10,000`, :envvar:`REQUEST_SLEEP` to :const:`2,500`
@@ -354,6 +372,10 @@ raise them.
 
   If a session disconnects, ElectrumX continues to associate its cost with its IP address,
   so if it immediately reconnects it will re-acquire its previous cost allocation.
+  Moreover, sessions are also grouped together based on their IP address subnets, and cost
+  is accrued for the whole group. What subnet sizes to use can be configured via
+  :envvar:`SESSION_GROUP_BY_SUBNET_IPV4` (by default /24) and
+  :envvar:`SESSION_GROUP_BY_SUBNET_IPV6` (by default /48).
 
   A server operator should experiment with different values according to server loads.  It
   is not necessarily true that e.g. having a low soft limit, decreasing concurrency and
@@ -396,7 +418,7 @@ If you are not running a Tor proxy ElectrumX will be unable to connect
 to onion server peers, in which case rather than returning no onion
 peers it will fall back to a hard-coded list.
 
-To give incoming clients a full range of onion servers you will need
+To give incoming clients a full range of onion servers, you will need
 to be running a Tor proxy for ElectrumX to use.
 
 ElectrumX will perform peer-discovery by default and announce itself
@@ -482,5 +504,5 @@ your available physical RAM:
 
   I do not recommend raising this above 2000.
 
-.. _lib/coins.py: https://github.com/kyuupichan/electrumx/blob/master/electrumx/lib/coins.py
+.. _lib/coins.py: https://github.com/spesmilo/electrumx/blob/master/electrumx/lib/coins.py
 .. _uvloop: https://pypi.python.org/pypi/uvloop

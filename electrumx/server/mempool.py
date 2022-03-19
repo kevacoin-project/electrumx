@@ -265,20 +265,20 @@ class MemPool(object):
 
             # If it is a name transaction, remove the index.
             if tx.nameout:
-                if nameXs[tx.nameout]:
+                if nameXs[tx.nameout] and tx_hash in nameXs[tx.nameout]:
                     nameXs[tx.nameout].remove(tx_hash)
                 if not nameXs[tx.nameout]:
                     del nameXs[tx.nameout]
 
             # Kevacoin specific
             if tx.keyout:
-                if nameXs[tx.keyout]:
+                if nameXs[tx.keyout] and tx_hash in nameXs[tx.keyout]:
                     nameXs[tx.keyout].remove(tx_hash)
                 if not nameXs[tx.keyout]:
                     del nameXs[tx.keyout]
 
             if tx.namekeyout:
-                if nameXs[tx.namekeyout]:
+                if nameXs[tx.namekeyout] and tx_hash in nameXs[tx.namekeyout]:
                     nameXs[tx.namekeyout].remove(tx_hash)
                 if not nameXs[tx.namekeyout]:
                     del nameXs[tx.namekeyout]

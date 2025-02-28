@@ -86,7 +86,8 @@ class TxDb(object):
                     tx_addr_outs = tx_addr_outs + [address, value]
                 elif address_script.startswith(b'\x6a'):
                     # OP_RETURN
-                    pass
+                    address = 'ret'
+                    tx_addr_outs = tx_addr_outs + [address, value]
                 else:
                     # It may be native witness starts with '\x00\x14' and followed by hash160.
                     # Or completely something else. Put it in the category of "unhandled".
